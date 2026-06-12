@@ -19,13 +19,13 @@ DISCIPLINE_MAPPING = {
 # Resolve paths relative to this script so they work regardless of the
 # process working directory.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-INPUT_DIR = os.path.join(BASE_DIR, 'input')
-ARCHIVE_DIR = os.path.join(BASE_DIR, 'archive')
-# The mapping workbook lives alongside the input files.
-MAP_FILE = os.path.join(INPUT_DIR, 'Discipline maping.xlsx')
 
 def load_mapping_table():
-    df_map = pd.read_excel(MAP_FILE)
+    map_file_input = os.path.join(BASE_DIR, 'input', 'Discipline maping.xlsx')
+    map_file_root = os.path.join(BASE_DIR, 'Discipline maping.xlsx')
+    map_file = map_file_input if os.path.exists(map_file_input) else map_file_root
+    
+    df_map = pd.read_excel(map_file)
     mapping_dict = {}
     for index, row in df_map.iterrows():
         disc = str(row['Discipline']).strip().upper()
@@ -43,21 +43,30 @@ def load_mapping_table():
         })
     return mapping_dict
 
-def process_file(file_path):
+def process_file_stream(file_stream, filename):
     db.init_db()
     mapping_dict = load_mapping_table()
     
-    log.info("Ingesting %s...", file_path)
-    df = pd.read_excel(file_path)
+    log.info("Ingesting %s from memory...", filename)
+    df = pd.read_excel(file_stream)
     
     # Determine correct columns (handling slight variations)
-    avail_id_col = next((c for c in df.columns if 'availability id' in c.lower()), None)
-    int_id_col = next((c for c in df.columns if '_id' in c.lower()), None)
-    fac_col = next((c for c in df.columns if 'facility' in c.lower() or 'setting' in c.lower()), None)
-    disc_col = next((c for c in df.columns if 'discipline' in c.lower()), None)
+    # The user explicitly wants _id and Availability ID to be distinct.
+    avail_id_col = next((c for c in df.columns if 'availability id' in str(c).lower()), None)
+    
+    # Strictly look for _id. Since it's often exact, we can check for exactly '_id' or fall back to 'id' if needed, but strictly separate from availability id.
+    int_id_col = next((c for c in df.columns if str(c).strip().lower() == '_id'), None)
+    if not int_id_col:
+        int_id_col = next((c for c in df.columns if str(c).strip().lower() == 'id'), None)
+        
+    fac_col = next((c for c in df.columns if 'facility' in str(c).lower() or 'setting' in str(c).lower()), None)
+    disc_col = next((c for c in df.columns if 'discipline' in str(c).lower()), None)
+    
+    # Optional: Find an availability name or site name column
+    name_col = next((c for c in df.columns if 'name' in str(c).lower() and 'discipline' not in str(c).lower()), None)
     
     if not all([avail_id_col, int_id_col, fac_col, disc_col]):
-        log.warning("Skipping %s: Missing required columns.", file_path)
+        log.warning("Skipping %s: Missing required columns.", filename)
         return False
         
     added_count = 0
@@ -84,30 +93,28 @@ def process_file(file_path):
             disciplines_to_set.extend(specs)
             
         if disciplines_to_set:
-            db.insert_or_ignore(avail_id, int_id, fac_type, disciplines_to_set)
+            avail_name = str(row[name_col]).strip() if name_col else ""
+            db.insert_or_ignore(avail_id, int_id, fac_type, disciplines_to_set, avail_name)
             added_count += 1
             
-    log.info("Added %d records to database from %s.", added_count, file_path)
-
-    # Move to archive (ensure the destination exists).
-    os.makedirs(ARCHIVE_DIR, exist_ok=True)
-    filename = os.path.basename(file_path)
-    shutil.move(file_path, os.path.join(ARCHIVE_DIR, filename))
+    log.info("Added %d records to database from %s.", added_count, filename)
     return True
 
 def process_input_files():
+    # Deprecated: Kept only if running locally on existing files
     db.init_db()
-
-    excel_files = glob.glob(os.path.join(INPUT_DIR, '*.xlsx'))
-    # Don't try to ingest the mapping workbook itself.
-    map_name = os.path.basename(MAP_FILE)
-    excel_files = [f for f in excel_files if os.path.basename(f) != map_name]
-
-    if not excel_files:
-        log.info("No availability files to ingest in %s.", INPUT_DIR)
+    
+    # If someone still has an input folder, process them
+    input_dir = os.path.join(BASE_DIR, 'input')
+    if not os.path.exists(input_dir):
+        return
+        
+    excel_files = glob.glob(os.path.join(input_dir, '*.xlsx'))
+    excel_files = [f for f in excel_files if 'Discipline maping' not in os.path.basename(f)]
 
     for file_path in excel_files:
-        process_file(file_path)
+        with open(file_path, 'rb') as f:
+            process_file_stream(f, os.path.basename(file_path))
 
 if __name__ == "__main__":
     process_input_files()

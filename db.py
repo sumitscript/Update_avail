@@ -22,27 +22,33 @@ def init_db():
             disciplines_to_set TEXT, -- JSON array of specializations
             status TEXT DEFAULT 'PENDING',
             logs TEXT DEFAULT '',
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            availability_name TEXT DEFAULT ''
         )
     ''')
+    try:
+        c.execute("ALTER TABLE internships ADD COLUMN availability_name TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass # Column already exists
     conn.commit()
     conn.close()
 
-def insert_or_ignore(availability_id, internship_id, facility_type, disciplines):
+def insert_or_ignore(availability_id, internship_id, facility_type, disciplines, availability_name=''):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('''
-        INSERT INTO internships (availability_id, internship_id, facility_type, disciplines_to_set, status)
-        VALUES (?, ?, ?, ?, 'PENDING')
+        INSERT INTO internships (availability_id, internship_id, facility_type, disciplines_to_set, status, availability_name)
+        VALUES (?, ?, ?, ?, 'PENDING', ?)
         ON CONFLICT(availability_id) DO UPDATE SET
             internship_id = excluded.internship_id,
             facility_type = excluded.facility_type,
             disciplines_to_set = excluded.disciplines_to_set,
+            availability_name = excluded.availability_name,
             status = 'PENDING',
             logs = logs || '\nRe-queued for processing.',
             updated_at = CURRENT_TIMESTAMP
         WHERE internships.status = 'FAILED'
-    ''', (str(availability_id), str(internship_id), str(facility_type), json.dumps(disciplines)))
+    ''', (str(availability_id), str(internship_id), str(facility_type), json.dumps(disciplines), str(availability_name)))
     conn.commit()
     conn.close()
 
@@ -62,16 +68,34 @@ def append_log(availability_id, message):
 def get_next_pending():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT availability_id, internship_id, disciplines_to_set FROM internships WHERE status = 'PENDING' LIMIT 1")
+    c.execute("SELECT availability_id, internship_id, disciplines_to_set, availability_name FROM internships WHERE status = 'PENDING' LIMIT 1")
     row = c.fetchone()
     conn.close()
     if row:
         return {
             'availability_id': row[0],
             'internship_id': row[1],
-            'disciplines_to_set': json.loads(row[2])
+            'disciplines_to_set': json.loads(row[2]),
+            'availability_name': row[3] if len(row) > 3 else ''
         }
     return None
+
+def get_all_pending():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT availability_id, internship_id, disciplines_to_set, availability_name FROM internships WHERE status = 'PENDING'")
+    rows = c.fetchall()
+    conn.close()
+    
+    results = []
+    for row in rows:
+        results.append({
+            'availability_id': row[0],
+            'internship_id': row[1],
+            'disciplines_to_set': json.loads(row[2]),
+            'availability_name': row[3] if len(row) > 3 else ''
+        })
+    return results
 
 def update_status(availability_id, status, log_message=""):
     conn = sqlite3.connect(DB_PATH)

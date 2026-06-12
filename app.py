@@ -1,10 +1,11 @@
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, send_file
 import threading
 import db
 import worker
 import ingest
 import session_log
 import os
+import qa_engine
 
 from logging_config import get_logger
 
@@ -17,6 +18,10 @@ worker_thread = None
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.route('/qa')
+def qa_page():
+    return render_template('qa.html')
 
 @app.route('/api/stats')
 def api_stats():
@@ -55,10 +60,9 @@ def api_ingest():
         if 'file' in request.files:
             file = request.files['file']
             if file.filename != '':
-                os.makedirs(ingest.INPUT_DIR, exist_ok=True)
-                filepath = os.path.join(ingest.INPUT_DIR, file.filename)
-                file.save(filepath)
-                ingest.process_file(filepath)
+                import io
+                file_stream = io.BytesIO(file.read())
+                ingest.process_file_stream(file_stream, file.filename)
                 return jsonify({'status': 'success', 'message': f'Ingested {file.filename}'})
 
         # Fallback to ingesting everything in the folder
@@ -92,12 +96,36 @@ def api_worker_stop():
     worker.stop_worker()
     return jsonify({'status': 'success'})
 
+@app.route('/api/qa', methods=['POST'])
+def api_qa():
+    try:
+        prep_file = request.files.get('prep_file')
+        db_file = request.files.get('db_file')
+        
+        if not prep_file or not db_file:
+            return jsonify({'status': 'error', 'message': 'Missing prepared data or DB export file.'}), 400
+            
+        prep_path = os.path.join('input', 'temp_prep.xlsx')
+        db_path = os.path.join('input', 'temp_db.csv')
+        out_path = os.path.join('input', 'QA_Report.xlsx')
+        
+        prep_file.save(prep_path)
+        db_file.save(db_path)
+        
+        success = qa_engine.run_qa(prep_path, db_path, out_path)
+        
+        if success and os.path.exists(out_path):
+            return send_file(out_path, as_attachment=True, download_name='QA_Report.xlsx')
+        else:
+            return jsonify({'status': 'error', 'message': 'QA Engine failed or returned no output.'}), 500
+    except Exception as e:
+        log.exception("QA engine failed")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
 if __name__ == '__main__':
     # Initialize DB on startup
     db.init_db()
     # Create required dirs
-    os.makedirs('input', exist_ok=True)
-    os.makedirs('archive', exist_ok=True)
     os.makedirs('logs', exist_ok=True)
 
     # Start a fresh logging session: in-memory live logs are wiped and the

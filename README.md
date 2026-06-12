@@ -2,15 +2,15 @@
 
 This project automates the process of selecting and saving disciplines and specializations for internship availabilities on the Exxat ONE platform based on data provided in an Excel file.
 
-Download and Unzip/Extract the file
-
 ## Prerequisites & Installation
 
 1. Open this folder in VS Code.
 2. Open a new terminal inside VS Code and install the required dependencies along with the Playwright browsers:
    ```bash
    pip install -r requirements.txt
+   playwright install
    ```
+   *(If you don't have a `requirements.txt`, you will generally need `playwright`, `pandas`, `openpyxl`, and `flask`.)*
 
 ## Excel Template & Preparation
 
@@ -30,7 +30,7 @@ You must use the exact format provided in the template file: `E:\Exxat_Avai_upda
    ```bash
    python main.py
    ```
-2. The menu will appear. **Select option `1`** (one-time process).
+2. The menu will appear. **Select option `1`**.
 3. A browser window will open. Log in to your Exxat account.
 4. Once you are successfully logged in, **click on "Availability"**. 
 5. The page and browser will close automatically. Your session is now saved!

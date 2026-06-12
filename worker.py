@@ -17,6 +17,14 @@ is_running = False
 is_paused = False
 worker_task = None
 
+MAX_CONCURRENT_TABS = 10
+db_lock = asyncio.Lock()
+
+async def safe_db_update(avail_id, int_id, status, msg, spec_count=0):
+    async with db_lock:
+        db.update_status(avail_id, status, msg)
+        session_log.record_result(avail_id, int_id, status, msg, spec_count)
+
 def load_auth():
     if os.path.exists(SESSION_FILE) and os.path.exists(TENANT_ID_FILE):
         with open(TENANT_ID_FILE, 'r') as f:
@@ -56,10 +64,13 @@ async def authenticate():
         log.info("Session saved successfully. You can close this window now if it doesn't close automatically.")
         await browser.close()
 
-async def process_record(page, tenant_id, record):
+async def process_record_logic(page, tenant_id, record):
     avail_id = record['availability_id']
     int_id = record['internship_id']
+    avail_name = record.get('availability_name', '')
     disciplines = record['disciplines_to_set']
+    
+    used_fallbacks = []
 
     url = f"https://one.exxat.com/site/{tenant_id}/internships/{int_id}?tab=details"
 
@@ -285,6 +296,7 @@ async def process_record(page, tenant_id, record):
 
                     d(f"{kind}: scoped search failed for '{item_name}' under "
                       f"'{full_disc_name}'; falling back to unscoped.", level="WARN")
+                    used_fallbacks.append(f"{item_name} (unscoped fallback)")
 
             # Unscoped fallback — original behaviour.
             for i in range(cb_count):
@@ -314,6 +326,7 @@ async def process_record(page, tenant_id, record):
                     return True
                 await target.click(timeout=3000)
                 d(f"{kind}: SELECTED '{item_name}' (option).")
+                used_fallbacks.append(f"{item_name} (Strategy 2 Option)")
                 await dismiss_association_popup()
                 return True
             except Exception as e:
@@ -327,6 +340,7 @@ async def process_record(page, tenant_id, record):
             if await text_match.count() > 0:
                 await text_match.first.click(timeout=3000)
                 d(f"{kind}: SELECTED '{item_name}' (list text fallback).")
+                used_fallbacks.append(f"{item_name} (Strategy 3 List Text)")
                 await dismiss_association_popup()
                 return True
         except Exception as e:
@@ -364,7 +378,7 @@ async def process_record(page, tenant_id, record):
             return False
 
     # Mark the record as in-flight so it isn't picked up again.
-    db.update_status(avail_id, 'PROCESSING', f"Started processing internship {int_id}.")
+    await safe_db_update(avail_id, int_id, 'PROCESSING', f"Started processing internship {int_id}.")
     d(f"=== Processing internship {int_id} (availability {avail_id}) ===")
 
     missing_items = []
@@ -376,6 +390,51 @@ async def process_record(page, tenant_id, record):
         # Hard sleep to ensure React completely finishes rendering.
         await asyncio.sleep(10)
         d(f"Page loaded. Current URL: {page.url}")
+
+        # Inject Anti-Click Shield
+        shield_script = """
+        () => {
+            if (document.getElementById('exxat-auto-shield')) return;
+            const shield = document.createElement('div');
+            shield.id = 'exxat-auto-shield';
+            shield.style.position = 'fixed';
+            shield.style.top = '0';
+            shield.style.left = '0';
+            shield.style.width = '100vw';
+            shield.style.height = '100vh';
+            shield.style.backgroundColor = 'rgba(0, 0, 0, 0.4)';
+            shield.style.zIndex = '99999999';
+            shield.style.display = 'flex';
+            shield.style.justifyContent = 'center';
+            shield.style.alignItems = 'center';
+            shield.style.pointerEvents = 'auto'; // Block clicks
+            
+            const btn = document.createElement('button');
+            btn.innerText = 'Automation Running. Click to Allow Manual Edit for 10s';
+            btn.style.padding = '20px';
+            btn.style.fontSize = '24px';
+            btn.style.backgroundColor = '#ff4a4a';
+            btn.style.color = 'white';
+            btn.style.border = 'none';
+            btn.style.borderRadius = '10px';
+            btn.style.cursor = 'pointer';
+            
+            btn.onclick = () => {
+                shield.style.pointerEvents = 'none';
+                shield.style.backgroundColor = 'transparent';
+                btn.style.display = 'none';
+                setTimeout(() => {
+                    shield.style.pointerEvents = 'auto';
+                    shield.style.backgroundColor = 'rgba(0, 0, 0, 0.4)';
+                    btn.style.display = 'block';
+                }, 10000);
+            };
+            
+            shield.appendChild(btn);
+            document.body.appendChild(shield);
+        }
+        """
+        await page.evaluate(shield_script)
 
         # 1. Click the 'Edit basic information' pencil icon.
         d("Looking for 'Edit basic information' pencil icon...")
@@ -529,31 +588,89 @@ async def process_record(page, tenant_id, record):
         await dismiss_association_popup()
 
         # 5. Decide outcome.
+        name_prefix = f"[{avail_name}] " if avail_name and avail_name != "nan" else ""
+        fallback_str = f" | Fallbacks triggered for: {', '.join(used_fallbacks)}" if used_fallbacks else ""
+        
         if missing_items:
-            msg = (f"Saved={saved}, Closed={closed}. Could not select "
-                   f"{len(missing_items)} item(s): " + "; ".join(missing_items))
-            db.update_status(avail_id, 'FAILED', msg)
-            session_log.record_result(avail_id, int_id, 'FAILED', msg, spec_count=len(disciplines))
+            msg = (f"{name_prefix}Saved={saved}, Closed={closed}. Could not select "
+                   f"{len(missing_items)} item(s): " + "; ".join(missing_items)) + fallback_str
+            await safe_db_update(avail_id, int_id, 'FAILED', msg, len(disciplines))
             d(f"Result: FAILED - {msg}", level="ERROR")
+            raise Exception(msg)
         elif not saved:
-            msg = "Selections made but 'Save and Next' could not be clicked (button disabled?)."
-            db.update_status(avail_id, 'FAILED', msg)
-            session_log.record_result(avail_id, int_id, 'FAILED', msg, spec_count=len(disciplines))
+            msg = f"{name_prefix}Selections made but 'Save and Next' could not be clicked." + fallback_str
+            await safe_db_update(avail_id, int_id, 'FAILED', msg, len(disciplines))
             d(f"Result: FAILED - {msg}", level="ERROR")
+            raise Exception(msg)
         else:
-            msg = (f"Selected {len(unique_disciplines)} discipline(s) and "
-                   f"{len(disciplines)} specialization(s); saved and closed.")
-            db.update_status(avail_id, 'SUCCESS', msg)
-            session_log.record_result(avail_id, int_id, 'SUCCESS', msg, spec_count=len(disciplines))
+            msg = (f"{name_prefix}Selected {len(unique_disciplines)} discipline(s) and "
+                   f"{len(disciplines)} specialization(s); saved and closed.") + fallback_str
+            await safe_db_update(avail_id, int_id, 'SUCCESS', msg, len(disciplines))
             d(f"Result: SUCCESS - {msg}")
 
     except Exception as e:
         error_msg = str(e)
-        db.update_status(avail_id, 'FAILED', f"UI Wizard Error: {error_msg}")
-        session_log.record_result(avail_id, int_id, 'FAILED', f"UI Wizard Error: {error_msg}",
-                                  spec_count=len(disciplines))
-        d(f"Result: FAILED (exception) - {error_msg}", level="ERROR")
+        d(f"Result: ERROR (exception) - {error_msg}", level="ERROR")
         log.exception("Failed %s: %s", avail_id, error_msg)
+        raise  # Re-raise for the 3-strike retry loop!
+
+async def process_record_with_retries(context, tenant_id, record):
+    avail_id = record['availability_id']
+    int_id = record['internship_id']
+    
+    for attempt in range(1, 4):  # 1 to 3 attempts
+        page = await context.new_page()
+        try:
+            await process_record_logic(page, tenant_id, record)
+            # If it succeeds without raising an exception, we are done!
+            await page.close()
+            return
+        except Exception as e:
+            await page.close()
+            
+            if attempt < 3:
+                msg = f"Attempt {attempt} failed: {str(e)}. Retrying in 90 seconds..."
+                session_log.detail(msg, level="WARN", avail_id=avail_id)
+                log.warning(msg)
+                
+                # Check if paused before long sleep to be responsive
+                waited = 0
+                while waited < 90:
+                    if not is_running:
+                        return
+                    await asyncio.sleep(1)
+                    waited += 1
+            else:
+                final_msg = f"Failed after 3 attempts. Final error: {str(e)}"
+                await safe_db_update(avail_id, int_id, 'FAILED', final_msg, len(record.get('disciplines_to_set', [])))
+                session_log.detail(final_msg, level="ERROR", avail_id=avail_id)
+                log.error(final_msg)
+
+async def worker_pool_task(worker_id, queue, context, tenant_id):
+    # Uncomment the line below if Exxat blocks rapid multi-tab requests
+    # await asyncio.sleep(worker_id * 0.5) 
+    
+    while is_running:
+        if is_paused:
+            await asyncio.sleep(1)
+            continue
+            
+        try:
+            # Wait for 1 second so we can gracefully exit if stopped
+            record = await asyncio.wait_for(queue.get(), timeout=1.0)
+        except asyncio.TimeoutError:
+            continue
+            
+        if record is None:
+            # Sentinel value to terminate
+            queue.task_done()
+            break
+            
+        log.info("Worker %d processing Availability ID: %s", worker_id, record['availability_id'])
+        await process_record_with_retries(context, tenant_id, record)
+        queue.task_done()
+        
+        await asyncio.sleep(2) # Brief delay between records
 
 async def run_worker_loop():
     global is_running, is_paused
@@ -567,33 +684,44 @@ async def run_worker_loop():
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False, slow_mo=500)
         context = await browser.new_context(storage_state=session_file)
-        page = await context.new_page()
 
         is_running = True
-        log.info("Worker started.")
-        session_log.detail("Worker started; browser launched.")
+        log.info("Worker started with Multi-Tab Pool.")
+        session_log.detail("Worker started; browser launched with Multi-Tab Pool.")
 
-        while is_running:
-            if is_paused:
-                await asyncio.sleep(0.1)
-                continue
-
-            record = db.get_next_pending()
-            if not record:
-                log.info("No pending records. Queue is empty.")
-                session_log.detail("No pending records. Queue is empty.")
-                break
-
-            log.info("Processing Availability ID: %s", record['availability_id'])
-            await process_record(page, tenant_id, record)
-
-            # Human-like delay between records.
-            await asyncio.sleep(2)
-
+        queue = asyncio.Queue()
+        
+        # Load all pending records into queue at start
+        pending_records = db.get_all_pending()
+        if not pending_records:
+            log.info("No pending records. Queue is empty.")
+            session_log.detail("No pending records. Queue is empty.")
+            is_running = False
+            await browser.close()
+            return
+            
+        for r in pending_records:
+            await queue.put(r)
+            
+        # Spawn worker pool
+        workers = [
+            asyncio.create_task(worker_pool_task(i, queue, context, tenant_id))
+            for i in range(MAX_CONCURRENT_TABS)
+        ]
+        
+        # Wait for the queue to be fully processed
+        await queue.join()
+        
+        # Tell workers to stop by pushing None
+        for _ in range(MAX_CONCURRENT_TABS):
+            await queue.put(None)
+            
+        await asyncio.gather(*workers)
         await browser.close()
+        
     is_running = False
-    log.info("Worker stopped.")
-    session_log.detail("Worker stopped.")
+    log.info("Worker stopped. All records processed.")
+    session_log.detail("Worker stopped. All records processed.")
 
 def start_worker():
     global worker_task, is_running, is_paused
