@@ -7,5 +7,6 @@ archive/
 logs/
 tenant_id.txt
 *.txt
+!requirements.txt
 QA_data/
 data/
