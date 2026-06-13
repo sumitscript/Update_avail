@@ -8,3 +8,4 @@ logs/
 tenant_id.txt
 *.txt
 QA_data/
+data/

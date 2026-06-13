@@ -1,6 +1,6 @@
-# Exxat Curriculum Automation Engine
+# Rubix Curriculum Automation Engine
 
-This project automates the process of selecting and saving disciplines and specializations for internship availabilities on the Exxat ONE platform based on data provided in an Excel file.
+This project automates the process of selecting and saving disciplines and specializations for internship availabilities on the Rubix ONE platform based on data provided in an Excel file.
 
 ## Prerequisites & Installation
 
@@ -14,7 +14,7 @@ This project automates the process of selecting and saving disciplines and speci
 
 ## Excel Template & Preparation
 
-You must use the exact format provided in the template file: `E:\Exxat_Avai_update\data_input_template.xlsx`. 
+You must use the exact format provided in the template file: `E:\Rubix_Avai_update\data_input_template.xlsx`. 
 *Note: Please download the template if it is provided to you as a link.*
 
 **Steps to prepare your data:**
@@ -31,7 +31,7 @@ You must use the exact format provided in the template file: `E:\Exxat_Avai_upda
    python main.py
    ```
 2. The menu will appear. **Select option `1`**.
-3. A browser window will open. Log in to your Exxat account.
+3. A browser window will open. Log in to your Rubix account.
 4. Once you are successfully logged in, **click on "Availability"**. 
 5. The page and browser will close automatically. Your session is now saved!
 

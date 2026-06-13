@@ -1,7 +1,53 @@
 import asyncio
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, Locator
 import db
 import os
+
+original_click = Locator.click
+async def patched_click(self, *args, **kwargs):
+    kwargs.pop('force', None)
+    try:
+        await self.page.evaluate("() => { const s = document.getElementById('rubix-auto-shield'); if(s) s.style.pointerEvents = 'none'; }")
+        await asyncio.sleep(0.05)
+    except: pass
+    try:
+        return await original_click(self, *args, **kwargs)
+    finally:
+        try:
+            await self.page.evaluate("() => { const s = document.getElementById('rubix-auto-shield'); if(s) s.style.pointerEvents = 'auto'; }")
+        except: pass
+
+original_fill = Locator.fill
+async def patched_fill(self, *args, **kwargs):
+    kwargs.pop('force', None)
+    try:
+        await self.page.evaluate("() => { const s = document.getElementById('rubix-auto-shield'); if(s) s.style.pointerEvents = 'none'; }")
+        await asyncio.sleep(0.05)
+    except: pass
+    try:
+        return await original_fill(self, *args, **kwargs)
+    finally:
+        try:
+            await self.page.evaluate("() => { const s = document.getElementById('rubix-auto-shield'); if(s) s.style.pointerEvents = 'auto'; }")
+        except: pass
+
+original_check = Locator.check
+async def patched_check(self, *args, **kwargs):
+    kwargs.pop('force', None)
+    try:
+        await self.page.evaluate("() => { const s = document.getElementById('rubix-auto-shield'); if(s) s.style.pointerEvents = 'none'; }")
+        await asyncio.sleep(0.05)
+    except: pass
+    try:
+        return await original_check(self, *args, **kwargs)
+    finally:
+        try:
+            await self.page.evaluate("() => { const s = document.getElementById('rubix-auto-shield'); if(s) s.style.pointerEvents = 'auto'; }")
+        except: pass
+
+Locator.click = patched_click
+Locator.fill = patched_fill
+Locator.check = patched_check
 
 import session_log
 from logging_config import get_logger
@@ -39,7 +85,7 @@ async def authenticate():
         context = await browser.new_context()
         page = await context.new_page()
 
-        log.info("Please log in to Exxat in the opened browser window.")
+        log.info("Please log in to Rubix in the opened browser window.")
         try:
             await page.goto("https://login.exxat.com/")
         except Exception as e:
@@ -86,7 +132,7 @@ async def process_record_logic(page, tenant_id, record):
         try:
             if await okay.count() > 0 and await okay.first.is_visible():
                 d("Association Update popup detected -> clicking OK.")
-                await okay.first.click(timeout=4000)
+                await okay.first.click(timeout=4000, force=True)
                 await asyncio.sleep(0.1)
                 return True
         except Exception as e:
@@ -108,7 +154,7 @@ async def process_record_logic(page, tenant_id, record):
             clear_all = page.get_by_text("Clear All", exact=True)
             if await clear_all.count() > 0 and await clear_all.first.is_visible():
                 d("Clicking top-level 'Clear All' to reset current selections.")
-                await clear_all.first.click()
+                await clear_all.first.click(force=True)
                 await asyncio.sleep(0.1)
                 remaining_chips = await page.locator('button[id^="chip-close-btn-"]').count()
                 if remaining_chips == 0:
@@ -135,7 +181,7 @@ async def process_record_logic(page, tenant_id, record):
                     # Expand if not already open.
                     is_expanded = (await header.get_attribute("aria-expanded")) == "true"
                     if not is_expanded:
-                        await header.click(timeout=3000)
+                        await header.click(timeout=3000, force=True)
                         await asyncio.sleep(0.1)
                         d(f"Expanded accordion #{i + 1}.")
 
@@ -144,7 +190,7 @@ async def process_record_logic(page, tenant_id, record):
                     clear_btn = parent.get_by_text("Clear All", exact=True)
                     if await clear_btn.count() > 0 and await clear_btn.first.is_visible():
                         d(f"Clicking 'Clear All' inside accordion #{i + 1}.")
-                        await clear_btn.first.click(timeout=3000)
+                        await clear_btn.first.click(timeout=3000, force=True)
                         await asyncio.sleep(0.1)
                         await dismiss_association_popup()
                     else:
@@ -198,7 +244,7 @@ async def process_record_logic(page, tenant_id, record):
                     try:
                         btn = page.locator(f'#{btn_id}')
                         if await btn.count() > 0 and await btn.first.is_visible():
-                            await btn.first.click(timeout=1500)
+                            await btn.first.click(timeout=1500, force=True)
                             await asyncio.sleep(0.1)
                     except Exception:
                         pass
@@ -222,13 +268,13 @@ async def process_record_logic(page, tenant_id, record):
           + (f" under discipline '{discipline_name}'" if discipline_name else "") + ".")
         inp = page.locator(input_selector)
         try:
-            await inp.click(timeout=4000)
+            await inp.click(timeout=4000, force=True)
         except Exception as e:
             d(f"{kind}: could not focus search box for '{item_name}' ({e}).", level="WARN")
         try:
-            await inp.fill("")
+            await inp.fill("", force=True)
             await asyncio.sleep(0.1)
-            await inp.fill(item_name)
+            await inp.fill(item_name, force=True)
         except Exception as e:
             d(f"{kind}: could not type '{item_name}' ({e}).", level="ERROR")
             return False
@@ -324,7 +370,7 @@ async def process_record_logic(page, tenant_id, record):
                 if (await target.get_attribute("aria-selected")) == "true":
                     d(f"{kind}: '{item_name}' already selected (option) - leaving as is.")
                     return True
-                await target.click(timeout=3000)
+                await target.click(timeout=3000, force=True)
                 d(f"{kind}: SELECTED '{item_name}' (option).")
                 used_fallbacks.append(f"{item_name} (Strategy 2 Option)")
                 await dismiss_association_popup()
@@ -338,7 +384,7 @@ async def process_record_logic(page, tenant_id, record):
             scope = listbox if await listbox.count() > 0 else page
             text_match = scope.get_by_text(item_name, exact=False)
             if await text_match.count() > 0:
-                await text_match.first.click(timeout=3000)
+                await text_match.first.click(timeout=3000, force=True)
                 d(f"{kind}: SELECTED '{item_name}' (list text fallback).")
                 used_fallbacks.append(f"{item_name} (Strategy 3 List Text)")
                 await dismiss_association_popup()
@@ -370,7 +416,7 @@ async def process_record_logic(page, tenant_id, record):
                 d(f"'{label}' button is still disabled (required fields may be missing).",
                   level="WARN")
                 return False
-            await locator.first.click(timeout=5000)
+            await locator.first.click(timeout=5000, force=True)
             d(f"Clicked '{label}'.")
             return True
         except Exception as e:
@@ -394,9 +440,9 @@ async def process_record_logic(page, tenant_id, record):
         # Inject Anti-Click Shield
         shield_script = """
         () => {
-            if (document.getElementById('exxat-auto-shield')) return;
+            if (document.getElementById('rubix-auto-shield')) return;
             const shield = document.createElement('div');
-            shield.id = 'exxat-auto-shield';
+            shield.id = 'rubix-auto-shield';
             shield.style.position = 'fixed';
             shield.style.top = '0';
             shield.style.left = '0';
@@ -447,12 +493,12 @@ async def process_record_logic(page, tenant_id, record):
         btn = page.locator(btn_selector)
         if await btn.count() > 0:
             d("Found pencil icon by aria-label -> clicking.")
-            await btn.first.click(timeout=10000)
+            await btn.first.click(timeout=10000, force=True)
         else:
             fallback_btn = page.locator('#view_and_track_availability_details_edit_basic_details_btn')
             if await fallback_btn.count() > 0:
                 d("Found pencil icon by ID -> clicking.")
-                await fallback_btn.first.click(timeout=10000)
+                await fallback_btn.first.click(timeout=10000, force=True)
             else:
                 d("Pencil icon NOT FOUND on the page.", level="ERROR")
                 raise Exception("Pencil icon not found on the page.")
@@ -463,7 +509,7 @@ async def process_record_logic(page, tenant_id, record):
 
         # Ensure we are on the '2. Basic Info' tab.
         try:
-            await page.get_by_role("button", name="2. Basic Info").click(timeout=2000)
+            await page.get_by_role("button", name="2. Basic Info").click(timeout=2000, force=True)
             d("Switched to '2. Basic Info' tab.")
             await asyncio.sleep(0.1)
         except Exception:
@@ -534,7 +580,7 @@ async def process_record_logic(page, tenant_id, record):
         d(f"Opening Specialization dropdown. Need {len(spec_names)} "
           f"specialization(s): {', '.join(spec_names)}")
 
-        await page.locator('button[aria-label="Specialization"]').click(timeout=5000)
+        await page.locator('button[aria-label="Specialization"]').click(timeout=5000, force=True)
         await asyncio.sleep(0.1)
         await dismiss_association_popup()
         await clear_dropdown_items()
@@ -553,7 +599,7 @@ async def process_record_logic(page, tenant_id, record):
 
         # Close the Specialization dropdown.
         try:
-            await page.locator('button[aria-label="Specialization"]').click(timeout=2000)
+            await page.locator('button[aria-label="Specialization"]').click(timeout=2000, force=True)
             d("Closed Specialization dropdown.")
         except Exception:
             await page.keyboard.press("Escape")
@@ -575,7 +621,7 @@ async def process_record_logic(page, tenant_id, record):
         closed = False
         try:
             if await close_btn.count() > 0:
-                await close_btn.first.click(timeout=5000)
+                await close_btn.first.click(timeout=5000, force=True)
                 d("Clicked the X (close) button.")
                 closed = True
             else:
@@ -647,7 +693,7 @@ async def process_record_with_retries(context, tenant_id, record):
                 log.error(final_msg)
 
 async def worker_pool_task(worker_id, queue, context, tenant_id):
-    # Uncomment the line below if Exxat blocks rapid multi-tab requests
+    # Uncomment the line below if Rubix blocks rapid multi-tab requests
     # await asyncio.sleep(worker_id * 0.5) 
     
     while is_running:

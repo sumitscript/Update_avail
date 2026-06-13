@@ -18,9 +18,9 @@ def run():
     setup_env()
     
     print("==================================================")
-    print("   Exxat Curriculum Automation Engine    ")
+    print("   Rubix Curriculum Automation Engine    ")
     print("==================================================")
-    print("1. Authenticate (Login to Exxat)")
+    print("1. Authenticate (Login to Rubix)")
     print("2. Start Local Dashboard & Engine")
     print("==================================================")
     
